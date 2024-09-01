@@ -1,0 +1,9 @@
+{
+    "presets": [
+      ["@babel/preset-env"],
+      ["@babel/preset-react", {
+        "pragma": "CustomReact.createElement" // Set custom JSX pragma
+      }]
+    ]
+  }
+  
