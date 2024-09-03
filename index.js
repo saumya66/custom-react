@@ -85,7 +85,12 @@ function commitWork(fiber) {//recuresively add nodes to the dom
     if (!fiber) {
         return
     }
-    const domParent = fiber.parent.dom
+
+    let domParentFiber = fiber.parent
+    while(!(domParentFiber.dom)){ //as we know functional components donot have parents, so we need to keep going up the parents to find a fiber which has a dom
+        domParentFiber = domParentFiber.parent
+    }
+    const domParent = domParentFiber.dom
     if(fiber.effectTag == "PLACEMENT" && fiber.dom != null){
         domParent.appendChild(fiber.dom)
     } else if (
@@ -99,12 +104,19 @@ function commitWork(fiber) {//recuresively add nodes to the dom
         )
     }
     else if(fiber.effectTab == "DELETION"){
-        domParent.removeChild(fiber.dom)
+        commitDeletion(fiber.dom)
     }
     commitWork(fiber.child)
     commitWork(fiber.sibling)
 }
 
+function commitDeletion(fiber,domParent ){
+    if(fiber.dom){
+        domParent.removeChild(fiber.dom)
+    }else{
+        commitDeletion(fiber.child, domParent)
+    }
+}
 
 const isPropAProperty = (prop) => prop != "children"  && !isEvent(key)
 function isPropertyGone(nextProps){
@@ -170,11 +182,11 @@ function reconcileChildren(wipFiber, elements)
 {
     let index = 0
     let oldFiber = wipFiber.alternate && wipFiber.alternate.child
+    let prevSibling = null
 
     while(index<elements.length || oldFiber !=null){
         let element = elements[index]
         let newFiber = null
-        let prevSibling = null
         //now we compare the old and the current fiber
         const sameType = oldFiber && element && oldFiber.type == element.type
 
@@ -221,20 +233,38 @@ function reconcileChildren(wipFiber, elements)
     }
 }
 
-function performUnitOfWork(fiber) {
-    //we have to attach a fiber to the dom 
+let wipFiber = null
+let hookIndex = null
+
+function updateFunctionComponent(fiber){
+    wipFiber = fiber
+    hookIndex = 0
+    wipFiber.hooks = []
+    const children = [fiber.type(fiber.props)] //run the function to get children, in this case it returns the h1 element and then we reconcile as usual
+    reconcileChildren(fiber, children)
+}
+
+function updateHostComponent(fiber){
     if(!fiber.dom){
         fiber.dom = createDomNode(fiber)
     }
-
-    // if (fiber.parent) { //this is bad 
-    //     fiber.parent.dom.appendChild(fiber.dom)
-    // }
-
-    //now we create new fibers from all children of current fiber
+ 
     let elements = fiber.props.children
 
     reconcileChildren(fiber, elements)
+}
+
+function performUnitOfWork(fiber) {
+    //we have to attach a fiber to the dom 
+
+    const isFunctionComponent = fiber.type instanceof Function
+
+    //we handle functional components differently than normal jsx or host fibers as in functional components as in this case the children can be received only after running the function
+    if(isFunctionComponent){
+        updateFunctionComponent(fiber)
+    } else {
+        updateHostComponent(fiber)
+    }
 
     // let index = 0
     // let prevSibling = null
@@ -273,17 +303,49 @@ function performUnitOfWork(fiber) {
             nextFiber  = nextFiber.parent
         }
     }
-
-
 }
 
+function useState(initial) {
+    const oldHook =
+      wipFiber.alternate &&
+      wipFiber.alternate.hooks &&
+      wipFiber.alternate.hooks[hookIndex]
+    const hook = {
+      state: oldHook ? oldHook.state : initial,
+      queue: [], //why
+    }
+
+    const actions = oldHook ? oldHook.queue : []
+    actions.forEach(action => {
+      hook.state = action(hook.state)
+    })
+    
+    const setState = action => {
+        hook.queue.push(action)
+        wipRoot = {
+          dom: currentRoot.dom,
+          props: currentRoot.props,
+          alternate: currentRoot,
+        }
+        nextUnitOfWork = wipRoot
+        deletions = []
+      }
+
+      wipFiber.hooks.push(hook)
+    hookIndex++
+    return [hook.state, setState]
+  }
 
 const CustomReact = {
     createElement,
-    render
+    render,
+    useState,
 }
-
-const element = <h1>ok what is upp</h1>
+function App(props) {
+    const [state, setState] = CustomReact.useState(1)
+    return <h1 onClick={() =>null}>Hi {props.name}</h1>
+  }
+const element = <App name="foo"/>
+  
 const container = document.getElementById("root")
-console.log(container)
 CustomReact.render(element, container)

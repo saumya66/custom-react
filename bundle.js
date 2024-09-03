@@ -1,5 +1,11 @@
 "use strict";
 
+function _slicedToArray(r, e) { return _arrayWithHoles(r) || _iterableToArrayLimit(r, e) || _unsupportedIterableToArray(r, e) || _nonIterableRest(); }
+function _nonIterableRest() { throw new TypeError("Invalid attempt to destructure non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method."); }
+function _unsupportedIterableToArray(r, a) { if (r) { if ("string" == typeof r) return _arrayLikeToArray(r, a); var t = {}.toString.call(r).slice(8, -1); return "Object" === t && r.constructor && (t = r.constructor.name), "Map" === t || "Set" === t ? Array.from(r) : "Arguments" === t || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(t) ? _arrayLikeToArray(r, a) : void 0; } }
+function _arrayLikeToArray(r, a) { (null == a || a > r.length) && (a = r.length); for (var e = 0, n = Array(a); e < a; e++) n[e] = r[e]; return n; }
+function _iterableToArrayLimit(r, l) { var t = null == r ? null : "undefined" != typeof Symbol && r[Symbol.iterator] || r["@@iterator"]; if (null != t) { var e, n, i, u, a = [], f = !0, o = !1; try { if (i = (t = t.call(r)).next, 0 === l) { if (Object(t) !== t) return; f = !1; } else for (; !(f = (e = i.call(t)).done) && (a.push(e.value), a.length !== l); f = !0); } catch (r) { o = !0, n = r; } finally { try { if (!f && null != t["return"] && (u = t["return"](), Object(u) !== u)) return; } finally { if (o) throw n; } } return a; } }
+function _arrayWithHoles(r) { if (Array.isArray(r)) return r; }
 function _typeof(o) { "@babel/helpers - typeof"; return _typeof = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function (o) { return typeof o; } : function (o) { return o && "function" == typeof Symbol && o.constructor === Symbol && o !== Symbol.prototype ? "symbol" : typeof o; }, _typeof(o); }
 function ownKeys(e, r) { var t = Object.keys(e); if (Object.getOwnPropertySymbols) { var o = Object.getOwnPropertySymbols(e); r && (o = o.filter(function (r) { return Object.getOwnPropertyDescriptor(e, r).enumerable; })), t.push.apply(t, o); } return t; }
 function _objectSpread(e) { for (var r = 1; r < arguments.length; r++) { var t = null != arguments[r] ? arguments[r] : {}; r % 2 ? ownKeys(Object(t), !0).forEach(function (r) { _defineProperty(e, r, t[r]); }) : Object.getOwnPropertyDescriptors ? Object.defineProperties(e, Object.getOwnPropertyDescriptors(t)) : ownKeys(Object(t)).forEach(function (r) { Object.defineProperty(e, r, Object.getOwnPropertyDescriptor(t, r)); }); } return e; }
@@ -83,16 +89,28 @@ function commitWork(fiber) {
   if (!fiber) {
     return;
   }
-  var domParent = fiber.parent.dom;
+  var domParentFiber = fiber.parent;
+  while (!domParentFiber.dom) {
+    //as we know functional components donot have parents, so we need to keep going up the parents to find a fiber which has a dom
+    domParentFiber = domParentFiber.parent;
+  }
+  var domParent = domParentFiber.dom;
   if (fiber.effectTag == "PLACEMENT" && fiber.dom != null) {
     domParent.appendChild(fiber.dom);
   } else if (fiber.effectTag === "UPDATE" && fiber.dom != null) {
     updateDom(fiber.dom, fiber.alternate.props, fiber.props);
   } else if (fiber.effectTab == "DELETION") {
-    domParent.removeChild(fiber.dom);
+    commitDeletion(fiber.dom);
   }
   commitWork(fiber.child);
   commitWork(fiber.sibling);
+}
+function commitDeletion(fiber, domParent) {
+  if (fiber.dom) {
+    domParent.removeChild(fiber.dom);
+  } else {
+    commitDeletion(fiber.child, domParent);
+  }
 }
 var isPropAProperty = function isPropAProperty(prop) {
   return prop != "children" && !isEvent(key);
@@ -138,10 +156,10 @@ function updateDom(dom, prevProps, nextProps) {
 function reconcileChildren(wipFiber, elements) {
   var index = 0;
   var oldFiber = wipFiber.alternate && wipFiber.alternate.child;
+  var prevSibling = null;
   while (index < elements.length || oldFiber != null) {
     var _element = elements[index];
     var newFiber = null;
-    var prevSibling = null;
     //now we compare the old and the current fiber
     var sameType = oldFiber && _element && oldFiber.type == _element.type;
     if (sameType) {
@@ -185,19 +203,33 @@ function reconcileChildren(wipFiber, elements) {
     index++;
   }
 }
-function performUnitOfWork(fiber) {
-  //we have to attach a fiber to the dom 
+var wipFiber = null;
+var hookIndex = null;
+function updateFunctionComponent(fiber) {
+  wipFiber = fiber;
+  hookIndex = 0;
+  wipFiber.hooks = [];
+  var children = [fiber.type(fiber.props)]; //run the function to get children, in this case it returns the h1 element and then we reconcile as usual
+  reconcileChildren(fiber, children);
+}
+function updateHostComponent(fiber) {
   if (!fiber.dom) {
     fiber.dom = createDomNode(fiber);
   }
-
-  // if (fiber.parent) { //this is bad 
-  //     fiber.parent.dom.appendChild(fiber.dom)
-  // }
-
-  //now we create new fibers from all children of current fiber
   var elements = fiber.props.children;
   reconcileChildren(fiber, elements);
+}
+function performUnitOfWork(fiber) {
+  //we have to attach a fiber to the dom 
+
+  var isFunctionComponent = fiber.type instanceof Function;
+
+  //we handle functional components differently than normal jsx or host fibers as in functional components as in this case the children can be received only after running the function
+  if (isFunctionComponent) {
+    updateFunctionComponent(fiber);
+  } else {
+    updateHostComponent(fiber);
+  }
 
   // let index = 0
   // let prevSibling = null
@@ -236,11 +268,48 @@ function performUnitOfWork(fiber) {
     }
   }
 }
+function useState(initial) {
+  var oldHook = wipFiber.alternate && wipFiber.alternate.hooks && wipFiber.alternate.hooks[hookIndex];
+  var hook = {
+    state: oldHook ? oldHook.state : initial,
+    queue: [] //why
+  };
+  var actions = oldHook ? oldHook.queue : [];
+  actions.forEach(function (action) {
+    hook.state = action(hook.state);
+  });
+  var setState = function setState(action) {
+    hook.queue.push(action);
+    wipRoot = {
+      dom: currentRoot.dom,
+      props: currentRoot.props,
+      alternate: currentRoot
+    };
+    nextUnitOfWork = wipRoot;
+    deletions = [];
+  };
+  wipFiber.hooks.push(hook);
+  hookIndex++;
+  return [hook.state, setState];
+}
 var CustomReact = {
   createElement: createElement,
-  render: render
+  render: render,
+  useState: useState
 };
-var element = CustomReact.createElement("h1", null, "ok what is upp");
+function App(props) {
+  var _CustomReact$useState = CustomReact.useState(1),
+    _CustomReact$useState2 = _slicedToArray(_CustomReact$useState, 2),
+    state = _CustomReact$useState2[0],
+    setState = _CustomReact$useState2[1];
+  return CustomReact.createElement("h1", {
+    onClick: function onClick() {
+      return null;
+    }
+  }, "Hi ", props.name);
+}
+var element = CustomReact.createElement(App, {
+  name: "foo"
+});
 var container = document.getElementById("root");
-console.log(container);
 CustomReact.render(element, container);
